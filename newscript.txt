@@ -1,0 +1,379 @@
+-- ===============================================
+-- AM_IQ ADVANCED TRADING SYSTEM v2.0 OPTIMIZED
+-- Volatility + RSI + Smart Alerts
+-- Optimized for IQ Option
+-- ===============================================
+
+-- ==========================
+-- 1) BUY-SELL SIGNALS + RSI
+-- ==========================
+instrument {
+    name = 'AM_IQ ADVANCED SYSTEM',
+    short_name = 'SIGNALS + RSI',
+    overlay = true
+}
+
+-- ===== MOVING AVERAGES INPUTS =====
+MaFast_period = input(1,"Ma Fast period",input.integer,1,1000,1)
+MaValue = input(5,"Ma Value", input.string_selection,inputs.titles)
+MaSlow_period = input(34,"Ma Slow period",input.integer,1,1000,1)
+Signal_period = input(4,"Signal period",input.integer,1,1000,1)
+
+-- ===== RSI INPUTS (Volatility + Confirmation) =====
+RSI_period = input(14,"RSI Period",input.integer,5,50,1)
+RSI_overbought = input(70,"RSI Overbought",input.integer,50,100,1)
+RSI_oversold = input(30,"RSI Oversold",input.integer,0,50,1)
+
+-- ===== VOLATILITY FILTER (ATR-based) =====
+ATR_period = input(14,"ATR Period",input.integer,5,50,1)
+volatility_threshold = input(1.5,"Volatility Threshold (Min ATR)",input.float,0.1,10,0.1)
+
+-- ===== COLORS & VISIBILITY =====
+input_group {
+    "Buy Signals",
+    colorBuy = input { default = "LIME", type = input.color },
+    visibleBuy = input { default = true, type = input.plot_visibility },
+    alertBuy = input { default = true, type = input.bool }
+}
+
+input_group {
+    "Sell Signals",
+    colorSell = input { default = "RED", type = input.color },
+    visibleSell = input { default = true, type = input.plot_visibility },
+    alertSell = input { default = true, type = input.bool }
+}
+
+input_group {
+    "RSI Display",
+    colorRSI_Buy = input { default = "rgba(0, 255, 0, 0.2)", type = input.color },
+    colorRSI_Sell = input { default = "rgba(255, 0, 0, 0.2)", type = input.color },
+    visibleRSI = input { default = true, type = input.plot_visibility }
+}
+
+-- ===== CALCULATIONS =====
+local titleValue = inputs[MaValue]
+
+-- Moving Averages
+smaFast = sma(titleValue, MaFast_period)
+smaSlow = sma(titleValue, MaSlow_period)
+
+-- MACD Histogram
+buffer1 = smaFast - smaSlow
+buffer2 = wma(buffer1, Signal_period)
+macd_histogram = buffer1 - buffer2
+
+-- RSI Confirmation
+rsi_value = rsi(close, RSI_period)
+
+-- Volatility Filter (ATR)
+atr_value = atr(ATR_period)
+is_volatile = atr_value > volatility_threshold
+
+-- ===== SIGNAL CONDITIONS WITH FILTERS =====
+-- BUY: MACD Crossover + RSI Confirmation + Volatility Check
+buyCondition = conditional(
+    buffer1 > buffer2 and 
+    buffer1[1] < buffer2[1] and 
+    rsi_value < RSI_overbought and
+    is_volatile == true
+)
+
+-- SELL: MACD Crossover + RSI Confirmation + Volatility Check
+sellCondition = conditional(
+    buffer1 < buffer2 and 
+    buffer1[1] > buffer2[1] and 
+    rsi_value > RSI_oversold and
+    is_volatile == true
+)
+
+-- ===== SIGNAL STRENGTH SCORING =====
+-- Score 0-100: quanto maior, mais forte o sinal
+local function calculate_buy_score()
+    local score = 0
+    if buffer1 > buffer2 then score = score + 30 end
+    if rsi_value < RSI_oversold then score = score + 40 end
+    if rsi_value < 50 then score = score + 20 end
+    if close > smaFast then score = score + 10 end
+    return score
+end
+
+local function calculate_sell_score()
+    local score = 0
+    if buffer1 < buffer2 then score = score + 30 end
+    if rsi_value > RSI_overbought then score = score + 40 end
+    if rsi_value > 50 then score = score + 20 end
+    if close < smaFast then score = score + 10 end
+    return score
+end
+
+buy_score = calculate_buy_score()
+sell_score = calculate_sell_score()
+
+-- ===== PLOTS =====
+if visibleBuy == true then
+    plot_shape(buyCondition, "BUY_SIGNAL", shape_style.arrowup, shape_size.large, colorBuy,
+        shape_location.belowbar, -1, "BUY STRONG", colorBuy)
+end
+
+if visibleSell == true then
+    plot_shape(sellCondition, "SELL_SIGNAL", shape_style.arrowdown, shape_size.large, colorSell,
+        shape_location.abovebar, -1, "SELL STRONG", colorSell)
+end
+
+-- RSI Background Colors (overbought/oversold zones)
+if visibleRSI == true then
+    local bg_color = rsi_value > RSI_overbought and colorRSI_Sell or 
+                     rsi_value < RSI_oversold and colorRSI_Buy or 
+                     "rgba(100, 100, 100, 0.05)"
+end
+
+-- Plot RSI line at bottom for reference
+plot(rsi_value, "RSI", "rgba(200, 150, 50, 0.7)", 1)
+
+
+-- =======================================
+-- 2) BEAR SUPPORT/RESISTANCE + LEVELS
+-- =======================================
+instrument{
+    name="BEAR SUPPORT/RESISTANCE",
+    icon='https://bit.ly/3C8cIFQ',
+    overlay=true
+}
+
+-- ===== LOCAL PIVOTS =====
+local function find_local_high()
+    local b = make_series()
+    local c = high[2]
+    if not get_value(c) then return b end
+    local d = high<=c and high[1]<=c and high[3]<=c and high[4]<=c
+    b:set(iff(d,c,b[1]))
+    return b
+end
+
+local function find_local_low()
+    local b = make_series()
+    local c = low[2]
+    if not get_value(c) then return b end
+    local d = low>=c and low[1]>=c and low[3]>=c and low[4]>=c
+    b:set(iff(d,c,b[1]))
+    return b
+end
+
+-- ===== INPUTS =====
+input_group{"Support/Resistance Style",
+    color_level = input{default="LIME",type=input.color},
+    width_level = input{default=2,type=input.line_width},
+    show_pivots = input{default=true,type=input.bool}
+}
+
+input_group{"Extreme Levels (100-200 periods)",
+    color_extreme = input{default="rgba(255, 100, 50, 0.5)",type=input.color},
+    width_extreme = input{default=1,type=input.line_width},
+    show_extreme = input{default=true,type=input.bool}
+}
+
+-- ===== PIVOT LEVELS =====
+h_pivot = find_local_high()
+l_pivot = find_local_low()
+
+if show_pivots == true then
+    hline(h_pivot,"Local_High",color_level,width_level)
+    hline(l_pivot,"Local_Low",color_level,width_level)
+end
+
+-- ===== EXTREME LEVELS CACHE (Optimized) =====
+if show_extreme == true then
+    local hh10 = highest(10)[1]
+    local ll10 = lowest(10)[1]
+    local hh30 = highest(30)[1]
+    local ll30 = lowest(30)[1]
+    local hh60 = highest(60)[1]
+    local ll60 = lowest(60)[1]
+    local hh100 = highest(100)[1]
+    local ll100 = lowest(100)[1]
+    local hh200 = highest(200)[1]
+    local ll200 = lowest(200)[1]
+
+    hline(hh100,"HH100",color_extreme,width_extreme)
+    hline(ll100,"LL100",color_extreme,width_extreme)
+    hline(hh200,"HH200",color_extreme,width_extreme)
+    hline(ll200,"LL200",color_extreme,width_extreme)
+end
+
+
+-- ==========================================
+-- 3) SMA ENGULF + TREND CONFIRMATION
+-- ==========================================
+instrument {
+    name = 'AM_IQ SMA ENGULF SYSTEM',
+    short_name = 'SMA-ENGULF',
+    icon = 'indicators:BB',
+    overlay = true
+}
+
+-- ===== MA INPUTS =====
+MaFast_period = input(3,"Ma Fast period",input.integer,1,1000,1)
+MaFast_average = input(4,"Ma Fast average", input.string_selection,averages.titles)
+MaFast_title = input(5,"Ma Fast title", input.string_selection,inputs.titles)
+
+MaSlow_period = input(7,"Ma Slow period",input.integer,1,1000,1)
+MaSlow_average = input(2,"Ma Slow average", input.string_selection,averages.titles)
+MaSlow_title = input(2,"Ma Slow title", input.string_selection,inputs.titles)
+
+MaTrend_period = input(100,"Ma Trend period",input.integer,1,1000,5)
+MaTrend_average = input(2,"Ma Trend average", input.string_selection,averages.titles)
+MaTrend_title = input(3,"Ma Trend title", input.string_selection,inputs.titles)
+
+-- ===== COLORS =====
+input_group {
+    "Ma Fast Line",
+    colorFast = input { default = "white", type = input.color },
+    widthFast = input { default = 2, type = input.line_width },
+    visibleFast = input { default = true, type = input.plot_visibility }
+}
+
+input_group {
+    "Ma Slow Line",
+    colorSlow = input { default = "purple", type = input.color },
+    widthSlow = input { default = 2, type = input.line_width },
+    visibleSlow = input { default = true, type = input.plot_visibility }
+}
+
+input_group {
+    "Ma Trend Line",
+    colorTrend = input { default = "orange", type = input.color },
+    widthTrend = input { default = 3, type = input.line_width },
+    visibleTrend = input { default = true, type = input.plot_visibility }
+}
+
+input_group {
+    "Trend Area",
+    colorAreaUp = input { default = "rgba(34, 139, 34, 0.2)", type = input.color },
+    colorAreaDown = input { default = "rgba(220, 20, 60, 0.2)", type = input.color },
+    visibleArea = input { default = true, type = input.plot_visibility }
+}
+
+input_group {
+    "Engulf Patterns",
+    colorEngulfBuy = input { default = "lime", type = input.color },
+    colorEngulfSell = input { default = "red", type = input.color },
+    visibleEngulfBuy = input { default = true, type = input.plot_visibility },
+    visibleEngulfSell = input { default = true, type = input.plot_visibility }
+}
+
+input_group {
+    "Outside Bars",
+    colorBuy2 = input { default = "rgba(0, 255, 0, 0.5)", type = input.color },
+    colorSell2 = input { default = "rgba(255, 0, 0, 0.5)", type = input.color },
+    visibleBuy2 = input { default = true, type = input.plot_visibility },
+    visibleSell2 = input { default = true, type = input.plot_visibility }
+}
+
+-- ===== MA CALCULATIONS =====
+local avgFast  = averages[MaFast_average]
+local titleFast = inputs[MaFast_title]
+local avgSlow  = averages[MaSlow_average]
+local titleSlow = inputs[MaSlow_title]
+local avgTrend = averages[MaTrend_average]
+local titleTrend = inputs[MaTrend_title]
+
+mafastval = avgFast(titleFast, MaFast_period)
+maslowval = avgSlow(titleSlow, MaSlow_period)
+matrendval = avgTrend(titleTrend, MaTrend_period)
+
+-- ===== PLOTS =====
+if visibleFast == true then
+    plot(mafastval, "Ma Fast", colorFast, widthFast)
+end
+if visibleSlow == true then
+    plot(maslowval, "Ma Slow", colorSlow, widthSlow)
+end
+if visibleTrend == true then
+    plot(matrendval, "Ma Trend", colorTrend, widthTrend)
+end
+
+-- Area between Fast and Slow
+if visibleArea == true then
+    fill(mafastval, maslowval, "Area", 
+        mafastval > maslowval and colorAreaUp or 
+        mafastval < maslowval and colorAreaDown)
+end
+
+-- ===== SECURITY & MULTI-TIMEFRAME =====
+candle_time = {"1s","5s","10s","15s","30s","1m","2m","5m","10m","15m","30m","1H","2H","4H","8H","12H","1D","1W","1M","1Y"}
+candle_time_res = input(6,"Candle check resolution",input.string_selection,candle_time)
+sec = security(current_ticker_id, candle_time[candle_time_res])
+
+filter_source = candle_time
+filter_pa_index = input(8,"Candle filter resolution",input.string_selection,filter_source)
+filter_pa = security(current_ticker_id, filter_source[filter_pa_index])
+
+if (sec ~= nil) then
+    MaFast0 = avgFast(titleFast, MaFast_period)
+    MaSlow0 = avgSlow(titleSlow, MaSlow_period)
+    MaTrend0 = avgTrend(titleTrend, MaTrend_period)
+
+    -- ===== ENGULF BUY PATTERN (Bullish) =====
+    if(visibleEngulfBuy == true) then
+        engulf_buy = (close > open and 
+                      close[1] < open[1] and 
+                      close > MaFast0 and 
+                      MaFast0 > MaSlow0 and 
+                      MaSlow0 > MaTrend0 and
+                      close > open[1] and 
+                      open <= close[1] and 
+                      abs(close-open) > abs(close[1]-open[1]))
+        
+        plot_shape(engulf_buy, "ENGULF_BUY", shape_style.triangleup, 
+                  shape_size.huge, colorEngulfBuy, shape_location.belowbar, 0, 
+                  "BULL ENGULF", colorEngulfBuy)
+    end
+
+    -- ===== ENGULF SELL PATTERN (Bearish) =====
+    if (visibleEngulfSell == true) then
+        engulf_sell = (close < open and 
+                       close[1] > open[1] and 
+                       close < MaFast0 and 
+                       MaFast0 < MaSlow0 and 
+                       MaSlow0 < MaTrend0 and
+                       close < open[1] and 
+                       open >= close[1] and 
+                       abs(close-open) > abs(close[1]-open[1]))
+        
+        plot_shape(engulf_sell, "ENGULF_SELL", shape_style.triangledown, 
+                  shape_size.huge, colorEngulfSell, shape_location.abovebar, 0, 
+                  "BEAR ENGULF", colorEngulfSell)
+    end
+
+    -- ===== OUTSIDE BAR BUY (Sniper Bull) =====
+    if (filter_pa ~= nil and visibleBuy2 == true) then
+        outside_buy = (open[3] < close[3] and 
+                      open[2] < close[2] and 
+                      open[1] > close[1] and 
+                      close[1] > open[2] and 
+                      open[1] > open[2] and 
+                      open < close)
+        
+        plot_shape(outside_buy, "SNIPER_BUY", shape_style.triangleup, 
+                  shape_size.huge, colorBuy2, shape_location.belowbar, 0, 
+                  "SNIPER BUY", colorBuy2)
+    end
+
+    -- ===== OUTSIDE BAR SELL (Sniper Bear) =====
+    if (filter_pa ~= nil and visibleSell2 == true) then
+        outside_sell = (open[3] > close[3] and 
+                       open[2] > close[2] and 
+                       open[1] < close[1] and 
+                       close[1] < open[2] and 
+                       open[1] < open[2] and 
+                       open > close)
+        
+        plot_shape(outside_sell, "SNIPER_SELL", shape_style.triangledown, 
+                  shape_size.huge, colorSell2, shape_location.abovebar, 0, 
+                  "SNIPER SELL", colorSell2)
+    end
+end
+
+-- ===============================================
+-- FIM DO SCRIPT
+-- ===============================================
