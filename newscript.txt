@@ -50,6 +50,19 @@ input_group {
     visibleRSI = input { default = true, type = input.plot_visibility }
 }
 
+input_group {
+    "AI Analysis Engine",
+    enableAI = input { default = true, type = input.bool },
+    aiStrictMode = input { default = true, type = input.bool },
+    aiMinConfidence = input { default = 65, type = input.integer },
+    aiVolatilityBoost = input { default = 12, type = input.integer },
+    aiTrendBoost = input { default = 8, type = input.integer },
+    aiRsiBoost = input { default = 10, type = input.integer },
+    aiColorBuy = input { default = "AQUA", type = input.color },
+    aiColorSell = input { default = "MAGENTA", type = input.color },
+    visibleAI = input { default = true, type = input.plot_visibility }
+}
+
 -- ===== CALCULATIONS =====
 local titleValue = inputs[MaValue]
 
@@ -109,6 +122,37 @@ end
 buy_score = calculate_buy_score()
 sell_score = calculate_sell_score()
 
+-- ===== AI ANALYSIS (Heuristic Intelligence Layer / IQ Option tuned) =====
+local function normalize_score(v)
+    if v < 0 then return 0 end
+    if v > 100 then return 100 end
+    return v
+end
+
+local buy_trend_ok = close > smaSlow
+local sell_trend_ok = close < smaSlow
+local buy_rsi_ok = rsi_value < 55
+local sell_rsi_ok = rsi_value > 45
+
+ai_buy_raw = buy_score
+             + (is_volatile and aiVolatilityBoost or -aiVolatilityBoost)
+             + (buy_trend_ok and aiTrendBoost or -aiTrendBoost)
+             + (buy_rsi_ok and aiRsiBoost or -aiRsiBoost)
+
+ai_sell_raw = sell_score
+              + (is_volatile and aiVolatilityBoost or -aiVolatilityBoost)
+              + (sell_trend_ok and aiTrendBoost or -aiTrendBoost)
+              + (sell_rsi_ok and aiRsiBoost or -aiRsiBoost)
+
+ai_buy_confidence = normalize_score(ai_buy_raw)
+ai_sell_confidence = normalize_score(ai_sell_raw)
+
+local ai_buy_gate = (aiStrictMode and buyCondition or true)
+local ai_sell_gate = (aiStrictMode and sellCondition or true)
+
+ai_buy_signal = conditional(enableAI and ai_buy_gate and ai_buy_confidence >= aiMinConfidence and ai_buy_confidence > ai_sell_confidence)
+ai_sell_signal = conditional(enableAI and ai_sell_gate and ai_sell_confidence >= aiMinConfidence and ai_sell_confidence > ai_buy_confidence)
+
 -- ===== PLOTS =====
 if visibleBuy == true then
     plot_shape(buyCondition, "BUY_SIGNAL", shape_style.arrowup, shape_size.large, colorBuy,
@@ -118,6 +162,17 @@ end
 if visibleSell == true then
     plot_shape(sellCondition, "SELL_SIGNAL", shape_style.arrowdown, shape_size.large, colorSell,
         shape_location.abovebar, -1, "SELL STRONG", colorSell)
+end
+
+if enableAI == true and visibleAI == true then
+    plot(ai_buy_confidence, "AI Buy Confidence", aiColorBuy, 1)
+    plot(ai_sell_confidence, "AI Sell Confidence", aiColorSell, 1)
+
+    plot_shape(ai_buy_signal, "AI_BUY_SIGNAL", shape_style.triangleup, shape_size.large, aiColorBuy,
+        shape_location.belowbar, 0, "AI BUY CONFIRM", aiColorBuy)
+
+    plot_shape(ai_sell_signal, "AI_SELL_SIGNAL", shape_style.triangledown, shape_size.large, aiColorSell,
+        shape_location.abovebar, 0, "AI SELL CONFIRM", aiColorSell)
 end
 
 -- RSI Background Colors (overbought/oversold zones)
